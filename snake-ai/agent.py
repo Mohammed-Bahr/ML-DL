@@ -8,9 +8,9 @@ from game import Direction, Point, SnakeGameAI
 from helper import plot
 from model import Linear_QNet, QTrainer
 
-MAX_MEMORY = 100_000
-BATCH_SIZE = 1000
-LR = 0.001
+MAX_MEMORY = 100_000 # this determines how many states are stored in memory if it exceeds it the oldest states will be discarded removed
+BATCH_SIZE = 1000 # this determines how many states are used in each training batch
+LR = 0.0001 # this determines the learning rate of the optimizer
 
 
 class Agent:
