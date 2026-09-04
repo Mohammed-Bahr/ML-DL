@@ -4,30 +4,46 @@ from collections import deque
 import numpy as np
 import torch
 
-from game import Direction, Point, SnakeGameAI
+from game import BLOCK_SIZE, Direction, Point, SnakeGameAI
 from helper import plot
 from model import Linear_QNet, QTrainer
 
-MAX_MEMORY = 100_000 # this determines how many states are stored in memory if it exceeds it the oldest states will be discarded removed
-BATCH_SIZE = 1000 # this determines how many states are used in each training batch
-LR = 0.0001 # this determines the learning rate of the optimizer
+MAX_MEMORY = 100_000  # this determines how many states are stored in memory if it exceeds it the oldest states will be discarded removed
+BATCH_SIZE = 1000  # this determines how many states are used in each training batch
+LR = 0.0001  # this determines the learning rate of the optimizer
+
+# CAUSE (efficiency): the previous code always ran on CPU even when a GPU is
+# available, wasting the big speedup CUDA gives for the per-step network calls.
+# WHY: torch can transparently pick the best device; on machines without a GPU
+# this falls back to CPU so behaviour is unchanged.
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class Agent:
     def __init__(self):
         self.n_games = 0
-        self.epsilon = 0  # randomness control
+        self.epsilon = 1.0  # randomness control (probability of a random move)
+        self.decay = 0.995  # to decay epsilon over time
+        # CAUSE (bug): there was no epsilon floor. With multiplicative decay the
+        # probability of exploring decays to ~0, so the agent can lock into a
+        # suboptimal loop it foundecayd early and never try better paths again.
+        # WHY: a small floor keeps a minimum amount of exploration forever.
+        self.epsilon_min = 0.02
         self.gamma = 0.9  # discount rate, must be smaller than 1
         self.memory = deque(maxlen=MAX_MEMORY)  # pops left automatically
-        self.model = Linear_QNet(11, 256 , 256, 3)
+        self.model = Linear_QNet(11, 256, 256, 3).to(DEVICE)
         self.trainer = QTrainer(self.model, lr=LR, gamma=self.gamma)
 
     def get_state(self, game):
         head = game.snake[0]
-        point_l = Point(head.x - 20, head.y)
-        point_r = Point(head.x + 20, head.y)
-        point_u = Point(head.x, head.y - 20)
-        point_d = Point(head.x, head.y + 20)
+        # CAUSE (bug): the offsets were hardcoded as literal `20`. If BLOCK_SIZE
+        # in game.py is ever changed the state silently becomes wrong (danger
+        # flags computed for a different grid than the game actually uses).
+        # WHY: deriving it from BLOCK_SIZE keeps state and game grid in sync.
+        point_l = Point(head.x - BLOCK_SIZE, head.y)
+        point_r = Point(head.x + BLOCK_SIZE, head.y)
+        point_u = Point(head.x, head.y - BLOCK_SIZE)
+        point_d = Point(head.x, head.y + BLOCK_SIZE)
 
         dir_l = game.direction == Direction.LEFT
         dir_r = game.direction == Direction.RIGHT
@@ -81,14 +97,25 @@ class Agent:
 
     def get_action(self, state):
         # trade-off between exploration / exploitation
-        self.epsilon = 80 - self.n_games
+        # self.epsilon = 80 - self.n_games
+        # CAUSE (bug): the old check was `random.randint(0, 200) < self.epsilon`
+        # with epsilon in (0, 1]. randint only returns 0..200, so a random move
+        # happened ONLY when the roll was exactly 0 (~0.5% of the time) — the
+        # agent barely explored from the start and learned very slowly.
+        # WHY: `random.random()` is uniform in [0, 1), so the comparison now
+        # gives the intended "explore with probability epsilon" behaviour.
+        self.epsilon = max(self.epsilon * self.decay, self.epsilon_min)
         final_move = [0, 0, 0]
-        if random.randint(0, 200) < self.epsilon:
+        if random.random() < self.epsilon:
             move = random.randint(0, 2)
             final_move[move] = 1
         else:
-            state0 = torch.tensor(state, dtype=torch.float)
-            prediction = self.model(state0)  # executes the forward function
+            state0 = torch.tensor(state, dtype=torch.float, device=DEVICE)
+            with torch.no_grad():
+                prediction = self.model(state0)  # executes the forward function
+            # CAUSE (efficiency): inference doesn't need gradients; wrapping it
+            # in no_grad avoids building an autograd graph every step, saving
+            # memory and CPU/GPU time.
             move = torch.argmax(prediction).item()
             final_move[move] = 1
 
