@@ -2,6 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from collections import Counter
 
+
+# Source: https://youtu.be/xtaom__-drE
+
 # ---------- Euclidean Distance ----------
 def euclidean_distance(p, q):
     p = np.array(p)
