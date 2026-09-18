@@ -44,11 +44,6 @@ class KMeansClustering:
         return y
 
 
-
-
-
-
-
 # Demo
 random_points = np.random.randint(0, 100, (100, 2))
 
